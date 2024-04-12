@@ -1,0 +1,14 @@
+version: "1"
+rules:
+  - base: dev
+    upstream: juewuy:dev
+    mergeMethod: merge
+  - base: master
+    upstream: juewuy:master
+    mergeMethod: merge
+  - base: rm
+    upstream: juewuy:rm
+    mergeMethod: merge
+  - base: stable
+    upstream: juewuy:stable
+    mergeMethod: merge
