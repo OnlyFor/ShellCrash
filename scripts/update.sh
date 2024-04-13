@@ -75,7 +75,7 @@ setrules(){ #自定义规则
 		'')	;;
 		*)
 			text=$(cat $YAMLSDIR/rules.yaml | grep -Ev '^#' | sed -n "$num p" | awk '{print $2}')
-			if [ -n $text ];then	
+			if [ -n "$text" ];then	
 				sed -i "/$text/d" $YAMLSDIR/rules.yaml
 				sleep 1
 				del_rule_type
@@ -676,7 +676,7 @@ setproviders(){ #自定义providers
 		[ "$res" = "1" ] && rm -rf $CRASHDIR/configs/providers.cfg
 		setproviders
 	;;
-	d)
+	e)
 		echo -e "\033[33m将清空 $CRASHDIR/providers 目录下所有内容\033[0m"
 		read -p "是否继续？(1/0) > " res
 		[ "$res" = "1" ] && rm -rf $CRASHDIR/providers
@@ -1010,7 +1010,11 @@ set_core_config(){ #配置文件功能
 	echo -e "\033[30;47m ShellCrash配置文件管理\033[0m"
 	echo -----------------------------------------------
 	echo -e " 1 在线\033[32m生成$crashcore配置文件\033[0m"
-	echo -e " 2 在线\033[33m获取完整配置文件\033[0m"
+	if [ -f "$CRASHDIR"/v2b_api.sh ];then
+		echo -e " 2 登录\033[33m获取订阅(推荐！)\033[0m"
+	else
+		echo -e " 2 在线\033[33m获取完配置文件\033[0m"
+	fi
 	echo -e " 3 本地\033[32m生成providers配置文件\033[0m"	
 	echo -e " 4 本地\033[33m上传完整配置文件\033[0m"
 	echo -e " 5 设置\033[36m自动更新\033[0m"
@@ -1039,20 +1043,25 @@ set_core_config(){ #配置文件功能
 		gen_core_config_link
 	;;
 	2)
-		echo -----------------------------------------------
-		echo -e "\033[33m此功能可能会导致一些bug！！！\033[0m"
-		echo -e "强烈建议你使用\033[32m在线生成配置文件功能！\033[0m"
-		echo -e "\033[33m继续后如出现任何问题，请务必自行解决，一切提问恕不受理！\033[0m"
-		echo -----------------------------------------------
-		sleep 1
-		read -p "我确认遇到问题可以自行解决[1/0] > " res
-		if [ "$res" = '1' ]; then
-			set_core_config_link
+		if [ -f "$CRASHDIR"/v2b_api.sh ];then
+			. "$CRASHDIR"/v2b_api.sh
+			set_core_config
 		else
 			echo -----------------------------------------------
-			echo -e "\033[32m正在跳转……\033[0m"
+			echo -e "\033[33m此功能可能会导致一些bug！！！\033[0m"
+			echo -e "强烈建议你使用\033[32m在线生成配置文件功能！\033[0m"
+			echo -e "\033[33m继续后如出现任何问题，请务必自行解决，一切提问恕不受理！\033[0m"
+			echo -----------------------------------------------
 			sleep 1
-			gen_core_config_link
+			read -p "我确认遇到问题可以自行解决[1/0] > " res
+			if [ "$res" = '1' ]; then
+				set_core_config_link
+			else
+				echo -----------------------------------------------
+				echo -e "\033[32m正在跳转……\033[0m"
+				sleep 1
+				gen_core_config_link
+			fi
 		fi
 	;;
 	3)
@@ -1651,7 +1660,7 @@ setcustgeo(){ #下载自定义数据库文件
 }
 setgeo(){ #数据库选择菜单
 	source $CFG_PATH > /dev/null
-	[ -n "$cn_mini.mmdb_v" ] && geo_type_des=精简版 || geo_type_des=全球版 
+	[ -n "$cn_mini_v" ] && geo_type_des=精简版 || geo_type_des=全球版 
 	echo -----------------------------------------------
 	echo -e "\033[36m请选择需要更新的Geo/CN数据库文件：\033[0m"
 	echo -e "\033[36m全球版GeoIP和精简版CN-IP数据库不共存\033[0m"
@@ -2313,10 +2322,18 @@ userguide(){
 	[ ! -s $CRASHDIR/yamls/config.yaml -a ! -s $CRASHDIR/jsons/config.json ] && {
 		echo -----------------------------------------------
 		echo -e "\033[32m是否导入配置文件？\033[0m(这是运行前的最后一步)"
-		echo -e "\033[0m你必须拥有一份yaml格式的配置文件才能运行服务！\033[0m"
+		echo -e "\033[0m你必须拥有一份配置文件才能运行服务！\033[0m"
 		echo -----------------------------------------------
 		read -p "现在开始导入？(1/0) > " res
-		[ "$res" = 1 ] && inuserguide=1 && set_core_config && inuserguide=""
+		[ "$res" = 1 ] && inuserguide=1 && {
+			if [ -f "$CRASHDIR"/v2b_api.sh ];then
+				. "$CRASHDIR"/v2b_api.sh
+			else
+				set_core_config
+			fi
+			set_core_config
+			inuserguide=""
+		}
 	}
 	#回到主界面
 	echo -----------------------------------------------
