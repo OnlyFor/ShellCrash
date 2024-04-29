@@ -15,7 +15,7 @@ source ${CRASHDIR}/configs/command.env 2>/dev/null
 setconfig(){
 	#参数1代表变量名，参数2代表变量值,参数3即文件路径
 	[ -z "$3" ] && configpath=${CFG_PATH} || configpath="${3}"
-	[ -n "$(grep "${1}=" "$configpath")" ] && sed -i "s#${1}=.*#${1}=${2}#g" $configpath || echo "${1}=${2}" >> $configpath
+	grep -q "${1}=" "$configpath" && sed -i "s#${1}=.*#${1}=${2}#g" $configpath || sed -i "\$a\\${1}=${2}" $configpath
 }
 ckcmd(){
 	command -v sh >/dev/null 2>&1 && command -v $1 >/dev/null 2>&1 || type $1 >/dev/null 2>&1
@@ -1097,7 +1097,7 @@ set_firewall_area(){
 	echo -e " 2 \033[36m仅劫持本机流量\033[0m"
 	echo -e " 3 \033[32m劫持局域网+本机流量\033[0m"
 	echo -e " 4 不配置流量劫持(纯净模式)\033[0m"
-	echo -e " 5 \033[33m转发局域网流量到旁路由设备\033[0m"
+	#echo -e " 5 \033[33m转发局域网流量到旁路由设备\033[0m"
 	echo -----------------------------------------------
 	read -p "请输入对应数字 > " num	
 	case $num in
