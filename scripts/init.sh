@@ -1,7 +1,7 @@
 #!/bin/sh
 # Copyright (C) Juewuy
 
-version=1.9.0release
+version=1.9.1beta8
 
 setdir(){
 	dir_avail(){
@@ -136,6 +136,9 @@ setconfig(){
 	systype=asusrouter #华硕固件
 	[ -f "/jffs/.asusrouter" ] && initdir='/jffs/.asusrouter'
 	[ -d "/jffs/scripts" ] && initdir='/jffs/scripts/nat-start' 
+	#华硕启用jffs
+	nvram set jffs2_scripts="1"
+	nvram commit
 	}
 [ -f "/data/etc/crontabs/root" ] && systype=mi_snapshot #小米设备
 [ -w "/var/mnt/cfg/firewall" ] && systype=ng_snapshot #NETGEAR设备
@@ -160,10 +163,10 @@ else
 	[ -w /etc/systemd/system ] && sysdir=/etc/systemd/system
 	if [ -n "$sysdir" -a "$USER" = "root" -a "$(cat /proc/1/comm)" = "systemd" ];then
 		#创建shellcrash用户
-		type userdel && userdel shellcrash 2>/dev/null
+		userdel shellcrash 2>/dev/null
 		sed -i '/0:7890/d' /etc/passwd
 		sed -i '/x:7890/d' /etc/group
-		if type useradd >/dev/null 2>&1; then
+		if useradd -h >/dev/null 2>&1; then
 			useradd shellcrash -u 7890 2>/dev/null
 			sed -Ei s/7890:7890/0:7890/g /etc/passwd
 		else
@@ -181,8 +184,9 @@ else
 	fi
 fi
 #修饰文件及版本号
-command -v bash >/dev/null 2>&1 && shtype=bash || shtype=sh 
-for file in start.sh task.sh ;do
+command -v bash >/dev/null 2>&1 && shtype=bash 
+[ -x /bin/ash ] && shtype=ash 
+for file in start.sh task.sh menu.sh;do
 	sed -i "s|/bin/sh|/bin/$shtype|" ${CRASHDIR}/${file}
 	chmod 755 ${CRASHDIR}/${file}
 done
@@ -201,6 +205,12 @@ else
 	COMMAND='"$TMPDIR/CrashCore -d $BINDIR -f $TMPDIR/config.yaml"'
 fi
 setconfig COMMAND "$COMMAND" ${CRASHDIR}/configs/command.env
+#设置防火墙执行模式
+[ -z "$(grep firewall_mod $CRASHDIR/configs/ShellClash.cfg 2>/dev/null)" ] && {
+	iptables -j REDIRECT -h >/dev/null 2>&1 && firewall_mod=iptables
+	nft add table inet shellcrash 2>/dev/null && firewall_mod=nftables
+	setconfig firewall_mod $firewall_mod
+}
 #设置更新地址
 [ -n "$url" ] && setconfig update_url $url
 #设置环境变量
@@ -231,6 +241,14 @@ else
 	echo -e "\033[33m无法写入环境变量！请检查安装权限！\033[0m"
 	exit 1
 fi
+#在允许的情况下创建/usr/bin/crash文件
+touch /usr/bin/crash 2>/dev/null && {
+	cat > /usr/bin/crash <<EOF
+#/bin/$shtype
+$CRASHDIR/menu.sh \$1 \$2 \$3 \$4 \$5
+EOF
+	chmod +x /usr/bin/crash
+}
 #梅林/Padavan额外设置
 [ -n "$initdir" ] && {
 	sed -i '/ShellCrash初始化/'d $initdir
@@ -291,14 +309,13 @@ done
 for file in cron task.sh task.list;do
 	mv -f ${CRASHDIR}/$file ${CRASHDIR}/task/$file 2>/dev/null
 done
-chmod 755 ${CRASHDIR}/task/task.sh
 #旧版文件清理
 userdel shellclash >/dev/null 2>&1
 sed -i '/shellclash/d' /etc/passwd
 sed -i '/shellclash/d' /etc/group
 rm -rf /etc/init.d/clash
 [ "$systype" = "mi_snapshot" -a "$CRASHDIR" != '/data/clash' ] && rm -rf /data/clash
-for file in CrashCore clash.sh shellcrash.rc core.new clashservice log shellcrash.service mark? mark.bak;do
+for file in CrashCore clash.sh getdate.sh shellcrash.rc core.new clashservice log shellcrash.service mark? mark.bak;do
 	rm -rf ${CRASHDIR}/$file
 done
 #旧版变量改名
@@ -307,5 +324,9 @@ sed -i "s/clash_v/core_v/g" $configpath
 sed -i "s/clash.meta/meta/g" $configpath
 sed -i "s/ShellClash/ShellCrash/g" $configpath
 sed -i "s/cpucore=armv8/cpucore=arm64/g" $configpath
+sed -i "s/redir_mod=Nft基础/redir_mod=Redir模式/g" $configpath
+sed -i "s/redir_mod=Nft混合/redir_mod=Tproxy模式/g" $configpath
+sed -i "s/redir_mod=Tproxy混合/redir_mod=Tproxy模式/g" $configpath
+sed -i "s/redir_mod=纯净模式/firewall_area=4/g" $configpath
 
 echo -e "\033[32m脚本初始化完成,请输入\033[30;47m crash \033[0;33m命令开始使用！\033[0m"

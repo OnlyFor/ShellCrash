@@ -1,11 +1,12 @@
 #!/bin/sh
 # Copyright (C) Juewuy
 
+CRASHDIR=$(cd $(dirname $0);pwd)
 CFG_PATH=${CRASHDIR}/configs/ShellCrash.cfg
 YAMLSDIR=${CRASHDIR}/yamls
 JSONSDIR=${CRASHDIR}/jsons
 #加载执行目录，失败则初始化
-source ${CRASHDIR}/configs/command.env >/dev/null 2>&1
+source ${CRASHDIR}/configs/command.env 2>/dev/null
 [ -z "$BINDIR" -o -z "$TMPDIR" -o -z "$COMMAND" ] && source ${CRASHDIR}/init.sh >/dev/null 2>&1
 [ ! -f ${TMPDIR} ] && mkdir -p ${TMPDIR}
 [ -n "$(tar --help 2>&1|grep -o 'no-same-owner')" ] && tar_para='--no-same-owner' #tar命令兼容
@@ -14,7 +15,7 @@ source ${CRASHDIR}/configs/command.env >/dev/null 2>&1
 setconfig(){
 	#参数1代表变量名，参数2代表变量值,参数3即文件路径
 	[ -z "$3" ] && configpath=${CFG_PATH} || configpath="${3}"
-	[ -n "$(grep "${1}=" "$configpath")" ] && sed -i "s#${1}=.*#${1}=${2}#g" $configpath || echo "${1}=${2}" >> $configpath
+	grep -q "${1}=" "$configpath" && sed -i "s#${1}=.*#${1}=${2}#g" $configpath || sed -i "\$a\\${1}=${2}" $configpath
 }
 ckcmd(){
 	command -v sh >/dev/null 2>&1 && command -v $1 >/dev/null 2>&1 || type $1 >/dev/null 2>&1
@@ -25,7 +26,7 @@ ckstatus(){
 	#检查/读取脚本配置文件
 	if [ -f $CFG_PATH ];then
 		[ -n "$(awk 'a[$0]++' $CFG_PATH)" ] && awk '!a[$0]++' $CFG_PATH > $CFG_PATH #检查重复行并去除
-		source $CFG_PATH >/dev/null 2>&1	
+		source $CFG_PATH 2>/dev/null
 	else
 		source ${CRASHDIR}/init.sh >/dev/null 2>&1
 	fi
@@ -34,10 +35,10 @@ ckstatus(){
 	#服务器缺省地址
 	[ -z "$mix_port" ] && mix_port=7890
 	[ -z "$redir_port" ] && redir_port=7892
+	[ -z "$fwmark" ] && fwmark=$redir_port
 	[ -z "$db_port" ] && db_port=9999
 	[ -z "$dns_port" ] && dns_port=1053
 	[ -z "$multiport" ] && multiport='22,53,80,123,143,194,443,465,587,853,993,995,5222,8080,8443'
-	[ -z "$local_proxy" ] && local_proxy=未开启
 	[ -z "$redir_mod" ] && redir_mod=纯净模式
 	#检查mac地址记录
 	[ ! -f ${CRASHDIR}/configs/mac ] && touch ${CRASHDIR}/configs/mac
@@ -84,12 +85,15 @@ ckstatus(){
 			[ "$day" = "0" ] && day='' || day="$day天"
 			time=`date -u -d @${time} +%H小时%M分%S秒`
 		fi
+	elif [ "$firewall_area" = 5 ] && [ -n "$(ip route list table 100)" ];then
+		run="\033[32m已设置（$redir_mod）\033[0m"
 	else
 		run="\033[31m没有运行（$redir_mod）\033[0m"
 		#检测系统端口占用
 		checkport
 	fi
 	[ "$crashcore" = singbox -o "$crashcore" = singboxp ] && corename=SingBox || corename=Clash
+	[ "$firewall_area" = 5 ] && corename='转发'
 	[ -f ${TMPDIR}/debug.log -o -f ${CRASHDIR}/debug.log -a -n "$PID" ] && auto="\033[33m并处于debug状态！\033[0m"
 	#输出状态
 	echo -----------------------------------------------
@@ -103,7 +107,7 @@ ckstatus(){
 	#检查新手引导
 	if [ -z "$userguide" ];then
 		setconfig userguide 1
-		source ${CRASHDIR}/getdate.sh && userguide
+		source ${CRASHDIR}/update.sh && userguide
 	fi
 	#检查执行权限
 	[ ! -x ${CRASHDIR}/start.sh ] && chmod +x ${CRASHDIR}/start.sh
@@ -118,7 +122,7 @@ ckstatus(){
 				core_v=$($file -v 2>/dev/null | head -n 1 | sed 's/ linux.*//;s/.* //')
 				[ -z "$core_v" ] && core_v=$($file version 2>/dev/null | grep -Eo 'version .*' | sed 's/version //')
 				if [ -n "$core_v" ];then
-					source ${CRASHDIR}/getdate.sh && setcoretype && \
+					source ${CRASHDIR}/update.sh && setcoretype && \
 					mv -f $file ${TMPDIR}/CrashCore && \
 					tar -zcf ${BINDIR}/CrashCore.tar.gz ${tar_para} -C ${TMPDIR} CrashCore && \
 					echo -e "\033[32m内核加载完成！\033[0m " && \
@@ -184,12 +188,12 @@ start_core(){
 		echo -e "\033[33m没有找到${crashcore}配置文件，尝试生成providers配置文件！\033[0m"
 		[ "$crashcore" = singboxp ] && coretype=singbox
 		[ "$crashcore" = meta -o "$crashcore" = clashpre ] && coretype=clash
-		source ${CRASHDIR}/getdate.sh && gen_${coretype}_providers
+		source ${CRASHDIR}/update.sh && gen_${coretype}_providers
 	elif [ -s $core_config -o -n "$Url" -o -n "$Https" ];then
 		${CRASHDIR}/start.sh start
 		#设置循环检测以判定服务启动是否成功
 		i=1
-		while [ -z "$test" -a "$i" -lt 5 ];do
+		while [ -z "$test" -a "$i" -lt 10 ];do
 			sleep 1
 			if curl --version > /dev/null 2>&1;then
 				test=$(curl -s http://127.0.0.1:${db_port}/configs | grep -o port)
@@ -201,7 +205,15 @@ start_core(){
 		[ -n "$test" -o -n "$(pidof CrashCore)" ] && startover
 	else
 		echo -e "\033[31m没有找到${crashcore}配置文件，请先导入配置文件！\033[0m"
-		source ${CRASHDIR}/getdate.sh && set_core_config
+		source ${CRASHDIR}/update.sh && set_core_config
+	fi
+}
+start_service(){
+	if [ "$firewall_area" = 5 ];then
+		${CRASHDIR}/start.sh start
+		echo -e "\033[32m已完成防火墙设置！\033[0m"
+	else
+		start_core
 	fi
 }
 checkrestart(){
@@ -209,7 +221,7 @@ checkrestart(){
 	echo -e "\033[32m检测到已变更的内容，请重启服务！\033[0m"
 	echo -----------------------------------------------
 	read -p "是否现在重启服务？(1/0) > " res
-	[ "$res" = 1 ] && start_core
+	[ "$res" = 1 ] && start_service
 }
 #功能相关
 log_pusher(){ #日志菜单
@@ -217,6 +229,7 @@ log_pusher(){ #日志菜单
 	[ -n "$push_Deer" ] && stat_Deer=32m已启用 || stat_Deer=33m未启用
 	[ -n "$push_bark" ] && stat_bark=32m已启用 || stat_bark=33m未启用
 	[ -n "$push_Po" ] && stat_Po=32m已启用 || stat_Po=33m未启用
+	[ -n "$push_PP" ] && stat_PP=32m已启用 || stat_PP=33m未启用
 	[ "$task_push" = 1 ] && stat_task=32m已启用 || stat_task=33m未启用
 	[ -n "$device_name" ] && device_s=32m$device_name || device_s=33m未设置
 	echo -----------------------------------------------
@@ -225,7 +238,8 @@ log_pusher(){ #日志菜单
 	echo -e " 3 PushDeer推送	——\033[$stat_Deer\033[0m"
 	echo -e " 4 Bark推送-IOS	——\033[$stat_bark\033[0m"
 	echo -e " 5 Passover推送	——\033[$stat_Po\033[0m"
-	echo -e " 6 推送任务日志	——\033[$stat_task\033[0m"
+	echo -e " 6 PushPlus推送	——\033[$stat_PP\033[0m"
+	echo -e " 7 推送任务日志	——\033[$stat_task\033[0m"
 	echo -e " 8 设置设备名称	——\033[$device_s\033[0m"
 	echo -e " 9 清空日志文件"
 	echo -----------------------------------------------
@@ -257,7 +271,7 @@ log_pusher(){ #日志菜单
 			echo -----------------------------------------------
 			read -p "请输入你获取到的API TOKEN > " TOKEN
 			echo -----------------------------------------------
-			echo -e "\033[32m请通过Telegram的对话窗口，向该机器人发送任意消息！\033[0m"
+			echo -e "请向\033[32m你申请的机器人\033[31m而不是BotFather\033[0m，发送任意几条消息！"
 			echo -----------------------------------------------
 			read -p "我已经发送完成(1/0) > " res
 			if [ "$res" = 1 ];then
@@ -329,14 +343,6 @@ log_pusher(){ #日志菜单
 			if [ -n "$url" ];then
 				push_bark=$url
 				setconfig push_bark $url
-				echo -----------------------------------------------
-				echo -e "\033[32m例: ?group=ShellCrash\033[0m"
-				read -p "请输入你的Bark请求参数(默认回车为空) > " param
-				param=$(echo $param | sed 's/\&/\\\&/g')
-				if [ -n "$param" ];then
-					bark_param=$param
-					setconfig bark_param \'$param\'
-				fi
 				${CRASHDIR}/start.sh logger "已完成Bark日志推送设置！" 32
 			else
 				echo -e "\033[31m输入错误，请重新输入！\033[0m"
@@ -355,7 +361,7 @@ log_pusher(){ #日志菜单
 				setconfig push_Po
 				setconfig push_Po_key
 			}
-		elif curl --version >/dev/null 2>&1;then 
+		else
 			#echo -e "\033[33m详细设置指南请参考 https://juewuy.github.io/ \033[0m"
 			echo -e "请先通过 \033[32;4mhttps://pushover.net/\033[0m 注册账号并获取\033[36mUser Key\033[0m"
 			echo -----------------------------------------------
@@ -380,13 +386,35 @@ log_pusher(){ #日志菜单
 			else
 				echo -e "\033[31m输入错误，请重新输入！\033[0m"
 			fi
-		else
-			echo -e "\033[33mPashover不支持使用wget命令推送，请尝试其他推送方式！\033[0m"
 		fi
 		sleep 1
 		log_pusher
 	;;
-	6)	
+	6)
+		echo -----------------------------------------------
+		if [ -n "$push_PP" ];then
+			read -p "确认关闭PushPlus日志推送？(1/0) > " res
+			[ "$res" = 1 ] && {
+				push_PP=
+				setconfig push_PP
+			}
+		else
+			#echo -e "\033[33m详细设置指南请参考 https://juewuy.github.io/ \033[0m"
+			echo -e "请先通过 \033[32;4mhttps://www.pushplus.plus/push1.html\033[0m 注册账号并获取\033[36mtoken\033[0m"
+			echo -----------------------------------------------
+			read -p "请输入你的token > " Token
+			if [ -n "$Token" ];then
+				push_PP=$Token
+				setconfig push_PP $Token
+				${CRASHDIR}/start.sh logger "已完成PushPlus日志推送设置！" 32
+			else
+				echo -e "\033[31m输入错误，请重新输入！\033[0m"
+			fi
+		fi
+		sleep 1
+		log_pusher
+	;;
+	7)	
 		[ "$task_push" = 1 ] && task_push='' || task_push=1
 		setconfig task_push $task_push
 		sleep 1
@@ -643,29 +671,19 @@ setdns(){ #DNS设置
 	fi
 }
 setipv6(){ #ipv6设置
-	
-	[ -z "$ipv6_support" ] && ipv6_support=已开启
 	[ -z "$ipv6_redir" ] && ipv6_redir=未开启
 	[ -z "$ipv6_dns" ] && ipv6_dns=已开启
 	[ -z "$cn_ipv6_route" ] && cn_ipv6_route=未开启
 	echo -----------------------------------------------
-	[ "$disoverride" != "1" ] && echo -e " 1 ipv6内核支持:  \033[36m$ipv6_support\033[0m  ——用于ipv6节点及规则支持"
-	echo -e " 2 ipv6透明代理:  \033[36m$ipv6_redir\033[0m  ——代理ipv6流量"
-	[ "$disoverride" != "1" ] && echo -e " 3 ipv6-DNS解析:  \033[36m$ipv6_dns\033[0m  ——决定内置DNS是否返回ipv6地址"	
-	echo -e " 4 CNIP绕过内核:  \033[36m$cn_ipv6_route\033[0m  ——优化性能，不兼容fake-ip"	
+	echo -e " 1 ipv6透明代理:  \033[36m$ipv6_redir\033[0m  ——代理ipv6流量"
+	[ "$disoverride" != "1" ] && echo -e " 2 ipv6-DNS解析:  \033[36m$ipv6_dns\033[0m  ——决定内置DNS是否返回ipv6地址"	
+	echo -e " 3 CNV6绕过内核:  \033[36m$cn_ipv6_route\033[0m  ——优化性能，不兼容fake-ip"	
 	echo -e " 0 返回上级菜单"
 	echo -----------------------------------------------
 	read -p "请输入对应数字 > " num		
 	case $num in
 	1)
-		[ "$ipv6_support" = "未开启" ] && ipv6_support=已开启 || ipv6_support=未开启
-		setconfig ipv6_support $ipv6_support
-		setipv6   
-	;;
-	2)
 		if [ "$ipv6_redir" = "未开启" ]; then 
-			echo -e "如果启用后导致部分应用加载缓慢，请关闭此功能即可恢复"
-			echo -e "\033[31m除非特殊需要，否则无需开启此功能！\033[0m"
 			ipv6_support=已开启
 			ipv6_redir=已开启
 			sleep 2
@@ -676,23 +694,23 @@ setipv6(){ #ipv6设置
 		setconfig ipv6_support $ipv6_support
 		setipv6   
 	;;
-	3)
+	2)
 		[ "$ipv6_dns" = "未开启" ] && ipv6_dns=已开启 || ipv6_dns=未开启
 		setconfig ipv6_dns $ipv6_dns
 		setipv6
 	;;
-	4)
+	3)
 		if [ "$ipv6_redir" = "未开启" ]; then
 			ipv6_support=已开启
 			ipv6_redir=已开启
 			setconfig ipv6_redir $ipv6_redir
 			setconfig ipv6_support $ipv6_support
 		fi
-		if [ -n "$(ipset -v 2>/dev/null)" -o -n "$(echo $redir_mod | grep Nft)" ];then
+		if [ -n "$(ipset -v 2>/dev/null)" ] || [ "$firewall_mod" = nftables ];then
 			[ "$cn_ipv6_route" = "未开启" ] && cn_ipv6_route=已开启 || cn_ipv6_route=未开启
 			setconfig cn_ipv6_route $cn_ipv6_route
 		else
-			echo -e "\033[31m当前设备缺少ipset模块或未使用Nft模式，无法启用绕过功能！！\033[0m"
+			echo -e "\033[31m当前设备缺少ipset模块或防火墙未使用nftables，无法启用绕过功能！！\033[0m"
 			sleep 1
 		fi
 		setipv6
@@ -923,51 +941,6 @@ macfilter(){ #局域网设备过滤
 		macfilter
 	fi
 }
-localproxy(){ #本机代理
-	[ -w /etc/systemd/system/shellcrash.service -o -w /usr/lib/systemd/system/shellcrash.service -o -x /bin/su ] && local_enh=1
-	[ -f /etc/rc.common -a "$(cat /proc/1/comm)" = "procd" ] && [ -w /etc/passwd ] && local_enh=1
-	echo -----------------------------------------------
-	echo -e "\033[31m注意:\033[0m如果你不了解Linux系统的流量机制及$crashcore内核的流量劫持机制"
-	echo -e "启用此功能将可能导致\033[31m流量回环乃至设备死机\033[0m等严重问题！！！"
-	echo -e "\033[33m如你使用了第三方DNS如smartdns等，请务必禁用此功能或者使用shellcrash用户执行！\033[0m"
-	sleep 1
-	[ -n "$local_enh" ] && {
-		ckcmd iptables && [ -n "$(iptables -m owner --help | grep owner)" ] && echo -e " 1 使用\033[32miptables增强模式\033[0m配置(支持docker,推荐！)"
-		nft add table inet shellcrash 2>/dev/null && echo -e " 2 使用\033[32mnftables增强模式\033[0m配置(支持docker,推荐！)"
-	}
-	echo -e " 3 使用\033[33m环境变量\033[0m方式配置(部分应用可能无法使用,不推荐！)"
-	echo -e " 0 返回上级菜单"
-	echo -----------------------------------------------
-	read -p "请选择本机代理方式 > " num
-	case "$num" in
-	1)
-			local_type="iptables增强模式"
-			local_proxy=已开启
-	;;
-	2)
-			local_type="nftables增强模式"
-			local_proxy=已开启
-	;;	
-	3)
-			if [ -z "$authentication" -o "$authentication" = "未设置" ];then
-				local_type="环境变量"
-				echo -e "\033[33m注意，请重启ShellCrash服务后手动输入以下命令使配置生效\033[0m"
-				echo -e "【\033[32m source /etc/profile > /dev/null \033[0m】"
-				local_proxy=已开启
-			else
-				echo -e "\033[32m检测到您已经设置了Http/Sock5代理密码，请先取消密码！\033[0m"
-				setport
-				localproxy
-			fi
-			sleep 1
-	;;	
-	*)
-			errornum
-	;;
-	esac
-	setconfig local_proxy $local_proxy
-	setconfig local_type $local_type
-}
 setboot(){ #启动相关设置
 	[ -z "$start_old" ] && start_old=未开启
 	[ -z "$start_delay" -o "$start_delay" = 0 ] && delay=未设置 || delay=${start_delay}秒
@@ -1115,192 +1088,272 @@ setboot(){ #启动相关设置
 	esac	
 
 }
-metacfg(){
+set_firewall_area(){
 	echo -----------------------------------------------
-	
-}
-normal_set(){ #基础设置
-	set_redir_mod(){
-		set_redir_config(){
-			setconfig redir_mod $redir_mod
-			setconfig dns_mod $dns_mod 
-			if [ "$redir_mod" = "混合模式" -o "$redir_mod" = "Tun模式" ] && [ "$crashcore" = "clash" ];then
-				rm -rf ${BINDIR}/clash
-				rm -rf ${CRASHDIR}/clash
-				setconfig crashcore meta
-			fi
-			echo -----------------------------------------------	
-			echo -e "\033[36m已设为 $redir_mod ！！\033[0m"
+	echo -e "\033[31m注意：\033[0m基于桥接网卡的Docker/虚拟机流量，请使用1或3！"
+	echo -e "\033[33m如你使用了第三方DNS如smartdns等，请勿启用本机代理或使用shellcrash用户执行！\033[0m"
+	echo -----------------------------------------------
+	echo -e " 1 \033[32m仅劫持局域网流量\033[0m"
+	echo -e " 2 \033[36m仅劫持本机流量\033[0m"
+	echo -e " 3 \033[32m劫持局域网+本机流量\033[0m"
+	echo -e " 4 不配置流量劫持(纯净模式)\033[0m"
+	#echo -e " 5 \033[33m转发局域网流量到旁路由设备\033[0m"
+	echo -----------------------------------------------
+	read -p "请输入对应数字 > " num	
+	case $num in
+	[1-4]) 
+		[ $firewall_area -ge 4 ] && {
+			redir_mod=Redir模式
+			setconfig redir_mod $redir_mod	
 		}
-		[ -n "$(iptables -j TPROXY 2>&1 | grep 'on-port')" ] && sup_tp=1
-		[ -n "$(ls /dev/net/tun 2>/dev/null)" ] || ip tuntap >/dev/null 2>&1 && sup_tun=1
-		nft add table inet shellcrash 2>/dev/null && sup_nft=1 && modprobe nft_tproxy >/dev/null 2>&1 && sup_nft=2
+		[ "$num" = 4 ] && {
+			redir_mod=纯净模式
+			setconfig redir_mod $redir_mod	
+		}
+		firewall_area=$num
+		setconfig firewall_area $firewall_area
+	;;
+	5) 
 		echo -----------------------------------------------
-		echo -e "当前代理模式为：\033[47;30m $redir_mod \033[0m；ShellCrash核心为：\033[47;30m $crashcore \033[0m"
+		echo -e "\033[31m注意：\033[0m此功能存在多种风险如无网络基础请勿尝试！"
+		echo -e "\033[33m说明：\033[0m此功能不启动内核仅配置防火墙转发，且子设备无需额外设置网关DNS"
+		echo -e "\033[33m说明：\033[0m支持防火墙分流及设备过滤，支持部分定时任务，但不支持ipv6！"
+		echo -e "\033[31m注意：\033[0m如需代理UDP，请确保旁路由运行了支持UDP代理的模式！"
+		echo -e "\033[31m注意：\033[0m如使用systemd方式启动，内核依然会空载运行，建议使用保守模式！"
+		echo -----------------------------------------------
+		read -p "请输入旁路由IPV4地址 > " bypass_host
+		[ -n "$bypass_host" ] && {
+			firewall_area=$num
+			setconfig firewall_area $firewall_area
+			setconfig bypass_host $bypass_host
+			redir_mod=TCP旁路转发
+			setconfig redir_mod $redir_mod
+		}
+	;;
+	*) errornum ;;
+	esac
+	sleep 1
+}
+set_redir_mod(){ #代理模式设置
+	set_redir_config(){
+		setconfig redir_mod $redir_mod
+		setconfig dns_mod $dns_mod 
+		echo -----------------------------------------------	
+		echo -e "\033[36m已设为 $redir_mod ！！\033[0m"
+	}
+	[ -n "$(ls /dev/net/tun 2>/dev/null)" ] || ip tuntap >/dev/null 2>&1 && sup_tun=1
+	[ -z "$firewall_area" ] && firewall_area=1
+	firewall_area_dsc=$(echo "仅局域网 仅本机 局域网+本机 纯净模式 主-旁转发($bypass_host)" | cut -d' ' -f$firewall_area)
+	if [ -n "$firewall_mod" ];then
+		echo -----------------------------------------------
+		echo -e "当前代理模式为：\033[47;30m$redir_mod\033[0m；ShellCrash核心为：\033[47;30m $crashcore \033[0m"
 		echo -e "\033[33m切换模式后需要手动重启服务以生效！\033[0m"
 		echo -----------------------------------------------
-		ckcmd iptables && echo -e " 1 \033[32mRedir模式\033[0m：    Redir转发TCP，不转发UDP"
-		[ -n "$sup_tun" ] && echo -e " 2 \033[36m混合模式\033[0m：     Redir转发TCP，Tun转发UDP"
-		[ -n "$sup_tun" ] && echo -e " 4 \033[33mTun模式\033[0m：      使用Tun转发TCP&UDP(占用高)"
-		[ -n "$sup_tp" ] && echo -e " 5 \033[32mTproxy模式\033[0m：   使用Tproxy转发TCP&UDP"
-		[ -n "$sup_nft" ] && echo -e " 6 \033[36mNft基础\033[0m：      使用nftables转发TCP，不转发UDP"
-		[ "$sup_nft" = 2 ] && echo -e " 7 \033[32mNft混合\033[0m：      使用nft_tproxy转发TCP&UDP"
-		echo -e " 8 \033[36m纯净模式\033[0m：     不设置流量转发"
+		[ $firewall_area -le 3 ] && {
+			echo -e " 1 \033[32mRedir模式\033[0m：    Redir转发TCP，不转发UDP"
+			echo -e " 2 \033[36m混合模式\033[0m：     Redir转发TCP，Tun转发UDP"
+			echo -e " 3 \033[32mTproxy模式\033[0m：   Tproxy转发TCP&UDP"
+			echo -e " 4 \033[33mTun模式\033[0m：      Tun转发TCP&UDP(占用高不推荐)"
+			echo -----------------------------------------------
+		}
+		[ "$firewall_area" = 5 ] && {
+			echo -e " 5 \033[32mTCP旁路转发\033[0m：    仅转发TCP流量至旁路由"
+			echo -e " 6 \033[36mT&U旁路转发\033[0m：    转发TCP&UDP流量至旁路由"
+			echo -----------------------------------------------
+		}
+		echo -e " 7 设置劫持范围：\033[47;30m$firewall_area_dsc\033[0m"
+		echo -e " 8 切换防火墙应用：\033[47;30m$firewall_mod\033[0m"
+		echo -e " 9 ipv6设置：\033[47;30m$ipv6_redir\033[0m"
 		echo " 0 返回上级菜单"
 		read -p "请输入对应数字 > " num	
-		if [ -z "$num" ]; then
-			errornum
-		elif [ "$num" = 0 ]; then
-			i=
-		elif [ "$num" = 1 ]; then
-			redir_mod=Redir模式
-			dns_mod=redir_host
-			set_redir_config
-
-		elif [ "$num" = 2 ]; then
-			[ -n "$sup_tun" ] || {
-				echo -e "\033[32m设备未检测到Tun内核模块，可能无法代理UDP流量！\033[0m"
-				sleep 1
-			}
-			redir_mod=混合模式	
-			set_redir_config
-			
-		elif [ "$num" = 3 ]; then
-			if [ -f /etc/init.d/qca-nss-ecm -a "$systype" = "mi_snapshot" ] ;then
-				read -p "当前设备的QOS服务与本模式冲突，是否禁用相关功能？(1/0) > " res
-				[ "$res" = '1' ] && ${CRASHDIR}/misnap_init.sh tproxyfix && redir_mod=Tproxy混合
-			else
-				redir_mod=Tproxy混合
-			fi	
-			set_redir_config
-			
-		elif [ "$num" = 4 ]; then
-			redir_mod=Tun模式
-			set_redir_config
-			
-		elif [ "$num" = 5 ]; then
-			if [ -f /etc/init.d/qca-nss-ecm -a "$systype" = "mi_snapshot" ] ;then
-				read -p "当前设备的QOS服务与本模式冲突，是否禁用相关功能？(1/0) > " res
-				[ "$res" = '1' ] && ${CRASHDIR}/misnap_init.sh tproxyfix && redir_mod=Tproxy模式
-			else
-				redir_mod=Tproxy模式
-			fi	
-			set_redir_config
-			
-		elif [ "$num" = 6 ]; then
-			if ckcmd opkg && [ -z "$(opkg list-installed | grep firewall4)" ];then
-				read -p "检测到缺少firewall4依赖，是否自动安装？(1/0) > " res
-				[ "$res" = '1' ] && opkg install firewall4 && redir_mod=Nft基础
-			else
-				redir_mod=Nft基础
-			fi
-			set_redir_config
-			
-		elif [ "$num" = 7 ]; then
-			if ckcmd opkg && [ -z "$(opkg list-installed | grep kmod-nft-tproxy)" ];then
-				read -p "检测到缺少kmod-nft-tproxy依赖，是否自动安装？(1/0) > " res
-				[ "$res" = '1' ] && opkg install kmod-nft-tproxy && redir_mod=Nft混合
-			else
-				redir_mod=Nft混合
-			fi
-			set_redir_config	
-			
-		elif [ "$num" = 8 ]; then
-			redir_mod=纯净模式	
-			set_redir_config		
-			echo -----------------------------------------------
-			echo -e "\033[33m当前模式需要手动在设备WiFi或应用中配置HTTP或sock5代理\033[0m"
-			echo -e "HTTP/SOCK5代理服务器地址：\033[30;47m$host\033[0m;端口均为：\033[30;47m$mix_port\033[0m"
-			echo -e "也可以使用更便捷的PAC自动代理，PAC代理链接为："
-			echo -e "\033[30;47m http://$host:$db_port/ui/pac \033[0m"
-			echo -e "PAC的使用教程请参考：\033[4;32mhttps://juewuy.github.io/ehRUeewcv\033[0m"
-			sleep 2
-		else
-			errornum
-		fi
-
-	}
-	set_dns_mod(){
-		echo -----------------------------------------------
-		echo -e "当前DNS运行模式为：\033[47;30m $dns_mod \033[0m"
-		echo -e "\033[33m切换模式后需要手动重启服务以生效！\033[0m"
-		echo -----------------------------------------------
-		echo -e " 1 fake-ip模式：   \033[32m响应速度更快\033[0m"
-		echo -e "                   不支持绕过CN-IP功能"
-		if [ "$crashcore" = singbox -o "$crashcore" = singboxp ];then
-			echo -e " 3 mix混合模式：   \033[32m内部realip外部fakeip\033[0m"
-			echo -e "                   依赖geosite-cn.(db/srs)数据库"
-		else
-			echo -e " 2 redir_host模式：\033[32m兼容性更好\033[0m"
-			echo -e "                   需搭配加密DNS使用"
-		fi
-		echo " 0 返回上级菜单"
-		read -p "请输入对应数字 > " num
-		if [ -z "$num" ]; then
-			errornum
-		elif [ "$num" = 0 ]; then
-			i=
-		elif [ "$num" = 1 ]; then
-			dns_mod=fake-ip
-			setconfig dns_mod $dns_mod 
-			echo -----------------------------------------------	
-			echo -e "\033[36m已设为 $dns_mod 模式！！\033[0m"
-
-		elif [ "$num" = 2 ]; then
-			dns_mod=redir_host
-			setconfig dns_mod $dns_mod 
-			echo -----------------------------------------------	
-			echo -e "\033[36m已设为 $dns_mod 模式！！\033[0m"
-		elif [ "$num" = 3 ]; then
-			if [ "$crashcore" = singbox -o "$crashcore" = singboxp ];then
-				dns_mod=mix
-				setconfig dns_mod $dns_mod 
-				echo -----------------------------------------------	
-				echo -e "\033[36m已设为 $dns_mod 模式！！\033[0m"
-			else
-				echo -e "\033[31m当前内核不支持的功能！！！\033[0m"
-				sleep 1
-			fi
-		else
-			errornum
-		fi
-	}
-	fake_ip_filter(){
-		echo -e "\033[32m用于解决Fake-ip模式下部分地址或应用无法连接的问题\033[0m"
-		echo -e "\033[31m脚本已经内置了大量地址，你只需要添加出现问题的地址！\033[0m"
-		echo -e "\033[36m示例：a.b.com"
-		echo -e "示例：*.b.com"
-		echo -e "示例：*.*.b.com\033[0m"
-		echo -----------------------------------------------
-		if [ -s ${CRASHDIR}/configs/fake_ip_filter ];then
-			echo -e "\033[33m已添加Fake-ip过滤地址：\033[0m"
-			cat ${CRASHDIR}/configs/fake_ip_filter | awk '{print NR" "$1}'
-		else
-			echo -e "\033[33m你还未添加Fake-ip过滤地址\033[0m" 
-		fi
-		echo -----------------------------------------------
-		echo -e "\033[32m输入数字直接移除对应地址，输入地址直接添加！\033[0m"
-		read -p "请输入数字或地址 > " input
-		case $input in
+		case $num in 
 		0) ;;
-		'') ;;
-		[0-99])
-			sed -i "${input}d" ${CRASHDIR}/configs/fake_ip_filter	2>/dev/null
-			echo -e "\033[32m移除成功！\033[0m"	
-			fake_ip_filter
+		1)
+			redir_mod=Redir模式
+			set_redir_config
+			set_redir_mod
+		;;
+		2)
+			if [ -n "$sup_tun" ];then
+				redir_mod=混合模式
+				set_redir_config
+			else
+				echo -e "\033[31m设备未检测到Tun内核模块，请尝试其他模式或者安装相关依赖！\033[0m"
+				sleep 1
+			fi
+			set_redir_mod
+		;;
+		3)
+			if [ "$firewall_mod" = "iptables" ] ;then
+				if [ -f /etc/init.d/qca-nss-ecm -a "$systype" = "mi_snapshot" ] ;then
+					read -p "xiaomi设备的QOS服务与本模式冲突，是否禁用相关功能？(1/0) > " res
+					[ "$res" = '1' ] && {
+						${CRASHDIR}/misnap_init.sh tproxyfix
+						redir_mod=Tproxy模式
+						set_redir_config
+					}
+				elif [ -n "$(grep -E '^TPROXY$' /proc/net/ip_tables_targets)" ] ;then
+					redir_mod=Tproxy模式
+					set_redir_config
+				else
+					echo -e "\033[31m设备未检测到iptables-mod-tproxy模块，请尝试其他模式或者安装相关依赖！\033[0m"
+					sleep 1					
+				fi	
+			elif [ "$firewall_mod" = "nftables" ] ;then
+				if modprobe nft_tproxy >/dev/null 2>&1;then
+					redir_mod=Tproxy模式
+					set_redir_config
+				else
+					echo -e "\033[31m设备未检测到nft_tproxy内核模块，请尝试其他模式或者安装相关依赖！\033[0m"
+					sleep 1					
+				fi
+			fi
+			set_redir_mod
+		;;
+		4)
+			if [ -n "$sup_tun" ];then
+				redir_mod=Tun模式
+				set_redir_config
+			else
+				echo -e "\033[31m设备未检测到Tun内核模块，请尝试其他模式或者安装相关依赖！\033[0m"
+				sleep 1
+			fi
+			set_redir_mod
+		;;
+		5)
+			redir_mod=TCP旁路转发
+			set_redir_config
+			set_redir_mod
+		;;
+		6)
+			redir_mod=T&U旁路转发
+			set_redir_config
+			set_redir_mod
+		;;
+		7)
+			set_firewall_area
+			set_redir_mod
+		;;	
+		8)
+			if [ "$firewall_mod" = 'iptables' ];then
+				if nft add table inet shellcrash 2>/dev/null;then
+					firewall_mod=nftables
+					redir_mod=Redir模式
+					setconfig redir_mod $redir_mod
+				else
+					echo -e "\033[31m当前设备未安装nftables或者nftables版本过低(<1.0.2),无法切换！\033[0m" 
+				fi
+			else
+				if ckcmd iptables;then
+					firewall_mod=iptables
+					redir_mod=Redir模式
+					setconfig redir_mod $redir_mod
+				else
+					echo -e "\033[31m当前设备未安装iptables,无法切换！\033[0m" 
+				fi
+			fi
+			sleep 1
+			setconfig firewall_mod $firewall_mod
+			set_redir_mod
+		;;	
+		9)
+			setipv6
+			set_redir_mod
 		;;
 		*)
-			echo -e "你输入的地址是：\033[32m$input\033[0m"	
-			read -p "确认添加？(1/0) > " res
-			[ "$res" = 1 ] && echo $input >> ${CRASHDIR}/configs/fake_ip_filter
-			fake_ip_filter
+			errornum
 		;;
 		esac
-	}
+	fi
+}
+set_dns_mod(){ #DNS设置
+	echo -----------------------------------------------
+	echo -e "当前DNS运行模式为：\033[47;30m $dns_mod \033[0m"
+	echo -e "\033[33m切换模式后需要手动重启服务以生效！\033[0m"
+	echo -----------------------------------------------
+	echo -e " 1 fake-ip模式：   \033[32m响应速度更快\033[0m"
+	echo -e "                   不支持绕过CN-IP功能"
+	if [ "$crashcore" = singbox -o "$crashcore" = singboxp ];then
+		echo -e " 3 mix混合模式：   \033[32m内部realip外部fakeip\033[0m"
+		echo -e "                   依赖geosite-cn.(db/srs)数据库"
+	elif [ "$crashcore" = meta ];then
+		echo -e " 2 redir_host模式：\033[32m兼容性更好\033[0m"
+		echo -e "                   需搭配加密DNS使用"
+	fi
+	echo -e " 4 \033[36mDNS进阶设置\033[0m"
+	echo " 0 返回上级菜单"
+	read -p "请输入对应数字 > " num
+	case $num in 
+	0) ;;
+	1)
+		dns_mod=fake-ip
+		setconfig dns_mod $dns_mod 
+		echo -----------------------------------------------	
+		echo -e "\033[36m已设为 $dns_mod 模式！！\033[0m"
+	;;
+	2)
+		dns_mod=redir_host
+		setconfig dns_mod $dns_mod 
+		echo -----------------------------------------------	
+		echo -e "\033[36m已设为 $dns_mod 模式！！\033[0m"
+	;;
+	3)
+		if [ "$crashcore" = singbox -o "$crashcore" = singboxp ];then
+			dns_mod=mix
+			setconfig dns_mod $dns_mod 
+			echo -----------------------------------------------	
+			echo -e "\033[36m已设为 $dns_mod 模式！！\033[0m"
+		else
+			echo -e "\033[31m当前内核不支持的功能！！！\033[0m"
+			sleep 1
+		fi
+	;;
+	4)
+		setdns
+		set_dns_mod
+	;;
+	*)
+		errornum
+	;;
+	esac
+}
+fake_ip_filter(){
+	echo -e "\033[32m用于解决Fake-ip模式下部分地址或应用无法连接的问题\033[0m"
+	echo -e "\033[31m脚本已经内置了大量地址，你只需要添加出现问题的地址！\033[0m"
+	echo -e "\033[36m示例：a.b.com"
+	echo -e "示例：*.b.com"
+	echo -e "示例：*.*.b.com\033[0m"
+	echo -----------------------------------------------
+	if [ -s ${CRASHDIR}/configs/fake_ip_filter ];then
+		echo -e "\033[33m已添加Fake-ip过滤地址：\033[0m"
+		cat ${CRASHDIR}/configs/fake_ip_filter | awk '{print NR" "$1}'
+	else
+		echo -e "\033[33m你还未添加Fake-ip过滤地址\033[0m" 
+	fi
+	echo -----------------------------------------------
+	echo -e "\033[32m输入数字直接移除对应地址，输入地址直接添加！\033[0m"
+	read -p "请输入数字或地址 > " input
+	case $input in
+	0) ;;
+	'') ;;
+	[0-99])
+		sed -i "${input}d" ${CRASHDIR}/configs/fake_ip_filter	2>/dev/null
+		echo -e "\033[32m移除成功！\033[0m"	
+		fake_ip_filter
+	;;
+	*)
+		echo -e "你输入的地址是：\033[32m$input\033[0m"	
+		read -p "确认添加？(1/0) > " res
+		[ "$res" = 1 ] && echo $input >> ${CRASHDIR}/configs/fake_ip_filter
+		fake_ip_filter
+	;;
+	esac
+}
+normal_set(){ #基础设置
 	#获取设置默认显示
 	[ -z "$skip_cert" ] && skip_cert=已开启
 	[ -z "$common_ports" ] && common_ports=已开启
-	[ -z "$dns_mod" ] && dns_mod=redir_host
+	[ -z "$dns_mod" ] && dns_mod=fake-ip
 	[ -z "$dns_over" ] && dns_over=已开启
 	[ -z "$cn_ip_route" ] && cn_ip_route=未开启
 	[ -z "$local_proxy" ] && local_proxy=未开启
@@ -1317,7 +1370,6 @@ normal_set(){ #基础设置
 	}
 	echo -e " 4 只代理常用端口： 	\033[36m$common_ports\033[0m   ————用于过滤P2P流量"
 	echo -e " 5 过滤局域网设备：	\033[36m$mac_return\033[0m   ————使用黑/白名单进行过滤"
-	echo -e " 6 设置本机代理服务:	\033[36m$local_proxy\033[0m   ————使本机流量经过ShellCrash内核"
 	echo -e " 7 屏蔽QUIC流量:	\033[36m$quic_rj\033[0m   ————优化视频性能"
 	[ "$disoverride" != "1" ] && {
 		[ "$dns_mod" != "fake-ip" ] && \
@@ -1390,18 +1442,6 @@ normal_set(){ #基础设置
 		fi
 		normal_set
 		
-	elif [ "$num" = 6 ]; then	
-		if [ "$local_proxy" = "未开启" ]; then 
-			localproxy
-		else
-			local_proxy=未开启
-			setconfig local_proxy $local_proxy
-			setconfig local_type
-			echo -e "\033[33m已经停用本机代理规则,请尽快重启服务！！\033[0m"
-		fi
-		sleep 1
-		normal_set
-		
 	elif [ "$num" = 7 ]; then	
 		echo -----------------------------------------------
 		if [ -n "$(echo "$redir_mod" | grep -oE '混合|Tproxy|Tun')" ];then
@@ -1420,7 +1460,7 @@ normal_set(){ #基础设置
 		normal_set		
 		
 	elif [ "$num" = 8 ]; then	
-		if [ -n "$(ipset -v 2>/dev/null)" -o -n "$(echo $redir_mod | grep Nft)" ];then
+		if [ -n "$(ipset -v 2>/dev/null)" ] || [ "$firewall_mod" = 'nftables' ];then
 			if [ "$cn_ip_route" = "未开启" ]; then 
 				echo -e "\033[32m已开启CN_IP绕过内核功能！！\033[0m"
 				echo -e "\033[31m注意！！！此功能会导致全局模式及一切CN相关规则失效！！！\033[0m"
@@ -1432,7 +1472,7 @@ normal_set(){ #基础设置
 			fi
 			setconfig cn_ip_route $cn_ip_route
 		else
-			echo -e "\033[31m当前设备缺少ipset模块或未使用Nft模式，无法启用绕过功能！！\033[0m"
+			echo -e "\033[31m当前设备缺少ipset模块或未使用nftables模式，无法启用绕过功能！！\033[0m"
 			sleep 1
 		fi
 		normal_set
@@ -1460,13 +1500,11 @@ advanced_set(){ #进阶设置
 	echo -e "\033[30;47m欢迎使用进阶模式菜单：\033[0m"
 	echo -e "\033[33m如您并不了解ShellCrash的运行机制，请勿更改本页面功能！\033[0m"
 	echo -----------------------------------------------
-	[ "$disoverride" != "1" ] && echo -e " 1 ipv6相关"
 	#echo -e " 2 配置Meta特性"
 	echo -e " 3 配置公网及局域网防火墙"
 	[ "$disoverride" != "1" ] && {
 		echo -e " 4 启用域名嗅探:	\033[36m$sniffer\033[0m	————用于流媒体及防DNS污染"
 		echo -e " 5 自定义\033[32m端口及秘钥\033[0m"
-		echo -e " 6 配置内置DNS服务	\033[36m$dns_no\033[0m"
 	}
 	echo -----------------------------------------------
 	echo -e " 9 \033[31m重置/备份/还原\033[0m脚本设置"
@@ -1474,10 +1512,6 @@ advanced_set(){ #进阶设置
 	echo -----------------------------------------------
 	read -p "请输入对应数字 > " num
 	case "$num" in
-	1)
-		setipv6
-		advanced_set
-	;;
 	3)
 		setfirewall
 		advanced_set	
@@ -1516,10 +1550,6 @@ advanced_set(){ #进阶设置
 		else
 			setport
 		fi	
-		advanced_set
-	;;
-	6)
-		setdns	
 		advanced_set
 	;;
 	9)
@@ -1614,6 +1644,7 @@ uninstall(){
 		rm -rf /usr/lib/systemd/system/shellcrash.service
 		rm -rf /www/clash
 		rm -rf /tmp/ShellCrash
+		rm -rf /usr/bin/crash
 		sed -i '/0:7890/d' /etc/passwd
 		userdel -r shellcrash 2>/dev/null
 		nvram set script_usbmount="" 2>/dev/null
@@ -1722,10 +1753,10 @@ tools(){
 		i=
 		
 	elif [ "$num" = 1 ]; then
-		source ${CRASHDIR}/getdate.sh && testcommand  
+		source ${CRASHDIR}/update.sh && testcommand  
 		
 	elif [ "$num" = 2 ]; then
-		source ${CRASHDIR}/getdate.sh && userguide
+		source ${CRASHDIR}/update.sh && userguide
 		
 	elif [ "$num" = 3 ]; then
 		log_pusher
@@ -1833,7 +1864,7 @@ main_menu(){
 		exit;
 		
 	elif [ "$num" = 1 ]; then
-		start_core
+		start_service
 		exit;
   
 	elif [ "$num" = 2 ]; then
@@ -1861,7 +1892,7 @@ main_menu(){
 		main_menu
     
 	elif [ "$num" = 6 ]; then
-		source ${CRASHDIR}/getdate.sh && set_core_config
+		source ${CRASHDIR}/update.sh && set_core_config
 		main_menu
 		
 	elif [ "$num" = 7 ]; then
@@ -1879,7 +1910,7 @@ main_menu(){
 
 	elif [ "$num" = 9 ]; then
 		checkcfg=$(cat $CFG_PATH)
-		source ${CRASHDIR}/getdate.sh && update
+		source ${CRASHDIR}/update.sh && update
 		if [ -n "$PID" ];then
 			checkcfg_new=$(cat $CFG_PATH)
 			[ "$checkcfg" != "$checkcfg_new" ] && checkrestart
