@@ -12,7 +12,7 @@ CRASHDIR=$(cd $(dirname $0);pwd)
 getconfig() { #读取配置及全局变量
 	#加载配置文件
 	. "$CRASHDIR"/configs/ShellCrash.cfg >/dev/null
-	#默认设置
+	#缺省值
 	[ -z "$redir_mod" ] && [ "$USER" = "root" -o "$USER" = "admin" ] && redir_mod=Redir模式
 	[ -z "$redir_mod" ] && redir_mod=纯净模式
 	[ -z "$skip_cert" ] && skip_cert=已开启
@@ -20,6 +20,7 @@ getconfig() { #读取配置及全局变量
 	[ -z "$ipv6_redir" ] && ipv6_redir=未开启
 	[ -z "$ipv6_dns" ] && ipv6_dns=已开启
 	[ -z "$cn_ipv6_route" ] && cn_ipv6_route=未开启
+	[ -z "$macfilter_type" ] && macfilter_type=黑名单
 	[ -z "$mix_port" ] && mix_port=7890
 	[ -z "$redir_port" ] && redir_port=7892
 	[ -z "$tproxy_port" ] && tproxy_port=7893
@@ -592,8 +593,8 @@ EOF
 	}
 	[ "$dns_mod" = "fake-ip" ] && {
 		global_dns=dns_fakeip
-		fake_ip_filter_domain=$(cat ${CRASHDIR}/configs/fake_ip_filter ${CRASHDIR}/configs/fake_ip_filter.list 2>/dev/null | grep -Ev '#|.\*|Mijia' | sed '/^\s*$/d' | sed 's/^[*+]\.//' | awk '{printf "\"%s\", ",$1}' | sed 's/, $//')
-  		fake_ip_filter_suffix=$(cat ${CRASHDIR}/configs/fake_ip_filter ${CRASHDIR}/configs/fake_ip_filter.list 2>/dev/null | grep -v '.\*' | grep -E '\*|\+' | sed 's/^[*+]//' | awk '{printf "\"%s\", ",$1}' | sed 's/, $//')
+		fake_ip_filter_domain=$(cat ${CRASHDIR}/configs/fake_ip_filter ${CRASHDIR}/configs/fake_ip_filter.list 2>/dev/null | grep -Ev '#|\*|\+|Mijia' | sed '/^\s*$/d' | awk '{printf "\"%s\", ",$1}' | sed 's/, $//')
+  		fake_ip_filter_suffix=$(cat ${CRASHDIR}/configs/fake_ip_filter ${CRASHDIR}/configs/fake_ip_filter.list 2>/dev/null | grep -v '.\*' | grep -E '\*|\+' | sed 's/^[*+]\.//' | awk '{printf "\"%s\", ",$1}' | sed 's/, $//')
   		fake_ip_filter_regex=$(cat ${CRASHDIR}/configs/fake_ip_filter ${CRASHDIR}/configs/fake_ip_filter.list 2>/dev/null | grep '.\*' | sed 's/^*/.\*/' | sed 's/^+/.\+/' | awk '{printf "\"%s\", ",$1}' | sed 's/, $//')
 		[ -n "$fake_ip_filter_domain" ] && fake_ip_filter_domain="{ \"domain\": [$fake_ip_filter_domain], \"server\": \"dns_direct\" },"
   		[ -n "$fake_ip_filter_suffix" ] && fake_ip_filter_suffix="{ \"domain_suffix\": [$fake_ip_filter_suffix], \"server\": \"dns_direct\" },"
@@ -601,8 +602,8 @@ EOF
 	}
 	[ "$dns_mod" = "mix" ] && {
 		global_dns=dns_fakeip
-		fake_ip_filter_domain=$(cat ${CRASHDIR}/configs/fake_ip_filter ${CRASHDIR}/configs/fake_ip_filter.list 2>/dev/null | grep -Ev '#|.\*|Mijia' | sed '/^\s*$/d' | sed 's/^[*+]\.//' | awk '{printf "\"%s\", ",$1}' | sed 's/, $//')
-  		fake_ip_filter_suffix=$(cat ${CRASHDIR}/configs/fake_ip_filter ${CRASHDIR}/configs/fake_ip_filter.list 2>/dev/null | grep -v '.\*' | grep -E '\*|\+' | sed 's/^[*+]//' | awk '{printf "\"%s\", ",$1}' | sed 's/, $//')
+		fake_ip_filter_domain=$(cat ${CRASHDIR}/configs/fake_ip_filter ${CRASHDIR}/configs/fake_ip_filter.list 2>/dev/null | grep -Ev '#|\*|\+|Mijia' | sed '/^\s*$/d' | awk '{printf "\"%s\", ",$1}' | sed 's/, $//')
+  		fake_ip_filter_suffix=$(cat ${CRASHDIR}/configs/fake_ip_filter ${CRASHDIR}/configs/fake_ip_filter.list 2>/dev/null | grep -v '.\*' | grep -E '\*|\+' | sed 's/^[*+]\.//' | awk '{printf "\"%s\", ",$1}' | sed 's/, $//')
   		fake_ip_filter_regex=$(cat ${CRASHDIR}/configs/fake_ip_filter ${CRASHDIR}/configs/fake_ip_filter.list 2>/dev/null | grep '.\*' | sed 's/^*/.\*/' | sed 's/^+/.\+/' | awk '{printf "\"%s\", ",$1}' | sed 's/, $//')
 		[ -n "$fake_ip_filter_domain" ] && fake_ip_filter_domain="{ \"domain\": [$fake_ip_filter_domain], \"server\": \"dns_direct\" },"
   		[ -n "$fake_ip_filter_suffix" ] && fake_ip_filter_suffix="{ \"domain_suffix\": [$fake_ip_filter_suffix], \"server\": \"dns_direct\" },"
@@ -864,10 +865,10 @@ cn_ip_route() { #CN-IP绕过
 	ckgeo cn_ip.txt china_ip_list.txt
 	[ -f "$BINDIR"/cn_ip.txt ] && [ "$firewall_mod" = iptables ] && {
 		# see https://raw.githubusercontent.com/Hackl0us/GeoIP2-CN/release/CN-ip-cidr.txt
-		echo "create cn_ip hash:net family inet hashsize 10240 maxelem 10240" >"$TMPDIR"/cn_ip.ipset
-		awk '!/^$/&&!/^#/{printf("add cn_ip %s'" "'\n",$0)}' "$BINDIR"/cn_ip.txt >>"$TMPDIR"/cn_ip.ipset
+		echo "create cn_ip hash:net family inet hashsize 10240 maxelem 10240" > "$TMPDIR"/cn_ip.ipset
+		awk '!/^$/&&!/^#/{printf("add cn_ip %s'" "'\n",$0)}' "$BINDIR"/cn_ip.txt >> "$TMPDIR"/cn_ip.ipset
 		ipset destroy cn_ip >/dev/null 2>&1
-		ipset -! restore <"$TMPDIR"/cn_ip.ipset
+		ipset -! restore < "$TMPDIR"/cn_ip.ipset
 		rm -rf "$TMPDIR"/cn_ip.ipset
 	}
 }
@@ -876,10 +877,10 @@ cn_ipv6_route() { #CN-IPV6绕过
 	[ -f "$BINDIR"/cn_ipv6.txt ] && [ "$firewall_mod" = iptables ] && {
 		#ipv6
 		#see https://ispip.clang.cn/all_cn_ipv6.txt
-		echo "create cn_ip6 hash:net family inet6 hashsize 5120 maxelem 5120" >"$TMPDIR"/cn_ipv6.ipset
-		awk '!/^$/&&!/^#/{printf("add cn_ip6 %s'" "'\n",$0)}' "$BINDIR"/cn_ipv6.txt >>"$TMPDIR"/cn_ipv6.ipset
+		echo "create cn_ip6 hash:net family inet6 hashsize 5120 maxelem 5120" > "$TMPDIR"/cn_ipv6.ipset
+		awk '!/^$/&&!/^#/{printf("add cn_ip6 %s'" "'\n",$0)}' "$BINDIR"/cn_ipv6.txt >> "$TMPDIR"/cn_ipv6.ipset
 		ipset destroy cn_ip6 >/dev/null 2>&1
-		ipset -! restore <"$TMPDIR"/cn_ipv6.ipset
+		ipset -! restore < "$TMPDIR"/cn_ipv6.ipset
 		rm -rf "$TMPDIR"/cn_ipv6.ipset
 	}
 }
@@ -1079,7 +1080,7 @@ start_iptables() { #iptables配置总入口
 			if ip6tables -j REDIRECT -h 2>/dev/null | grep -q '\--to-ports'; then
 				start_ipt_dns ip6tables PREROUTING shellcrashv6_dns #ipv6-局域网dns转发
 			else
-				ip6tables -I INPUT -p udp --dport 53 -m comment --comment "ShellCrash-IPV6_DNS-REJECT" -j REJECT
+				ip6tables -I INPUT -p udp --dport 53 -j REJECT
 			fi
 		}
 		[ "$local_proxy" = true ] && start_ipt_dns iptables OUTPUT shellcrash_dns_out #ipv4-本机dns转发
@@ -1090,8 +1091,8 @@ start_iptables() { #iptables配置总入口
 			set_cn_ip='-m set ! --match-set cn_ip dst'
 			set_cn_ip6='-m set ! --match-set cn_ip6 dst'
 		}
-		iptables -I FORWARD -p udp --dport 443 -o utun -m comment --comment "ShellCrash-QUIC-REJECT" $set_cn_ip -j REJECT >/dev/null 2>&1
-		ip6tables -I FORWARD -p udp --dport 443 -o utun -m comment --comment "ShellCrash-QUIC-REJECT" $set_cn_ip6 -j REJECT >/dev/null 2>&1
+		iptables -I FORWARD -p udp --dport 443 -o utun $set_cn_ip -j REJECT >/dev/null 2>&1
+		ip6tables -I FORWARD -p udp --dport 443 -o utun $set_cn_ip6 -j REJECT >/dev/null 2>&1
 	}
 }
 start_nft_route() { #nftables-route通用工具
@@ -1252,7 +1253,7 @@ start_firewall() { #路由规则总入口
 	#设置策略路由
 	[ "$firewall_area" != 4 ] && {
 		local table=100
-		[ "$redir_mod" = "Tproxy模式" ] && ip route add local default dev lo table $table
+		[ "$redir_mod" = "Tproxy模式" ] && ip route add local default dev lo table $table 2>/dev/null
 		[ "$redir_mod" = "Tun模式" -o "$redir_mod" = "混合模式" ] && {
 			i=1
 			while [ -z "$(ip route list | grep utun)" -a "$i" -le 29 ]; do
@@ -1265,14 +1266,14 @@ start_firewall() { #路由规则总入口
 				ip route add default dev utun table $table && tun_statu=true
 			fi
 		}
-		[ "$firewall_area" = 5 ] && ip route add default via $bypass_host table $table
-		[ "$redir_mod" != "Redir模式" ] && ip rule add fwmark $fwmark table $table
+		[ "$firewall_area" = 5 ] && ip route add default via $bypass_host table $table 2>/dev/null
+		[ "$redir_mod" != "Redir模式" ] && ip rule add fwmark $fwmark table $table 2>/dev/null
 	}
 	#添加ipv6路由
 	[ "$ipv6_redir" = "已开启" -a "$firewall_area" -le 3 ] && {
-		[ "$redir_mod" = "Tproxy模式" ] && ip -6 route add local default dev lo table $((table + 1))
-		[ -n "$(ip route list | grep utun)" ] && ip -6 route add default dev utun table $((table + 1))
-		[ "$redir_mod" != "Redir模式" ] && ip -6 rule add fwmark $fwmark table $((table + 1))
+		[ "$redir_mod" = "Tproxy模式" ] && ip -6 route add local default dev lo table $((table + 1)) 2>/dev/null
+		[ -n "$(ip route list | grep utun)" ] && ip -6 route add default dev utun table $((table + 1)) 2>/dev/null
+		[ "$redir_mod" != "Redir模式" ] && ip -6 rule add fwmark $fwmark table $((table + 1)) 2>/dev/null
 	}
 	#判断代理用途
 	[ "$firewall_area" = 2 -o "$firewall_area" = 3 ] && [ -n "$(grep '0:7890' /etc/passwd)" ] && local_proxy=true
@@ -1337,8 +1338,8 @@ stop_firewall() { #还原防火墙配置
 		iptables -D FORWARD -o utun -j ACCEPT 2>/dev/null
 		#屏蔽QUIC
 		[ "$dns_mod" != "fake-ip" -a "$cn_ip_route" = "已开启" ] && set_cn_ip='-m set ! --match-set cn_ip dst'
-		iptables -D INPUT -p udp --dport 443 -m comment --comment "ShellCrash-QUIC-REJECT" $set_cn_ip -j REJECT 2>/dev/null
-		iptables -D FORWARD -p udp --dport 443 -o utun -m comment --comment "ShellCrash-QUIC-REJECT" $set_cn_ip -j REJECT 2>/dev/null
+		iptables -D INPUT -p udp --dport 443 $set_cn_ip -j REJECT 2>/dev/null
+		iptables -D FORWARD -p udp --dport 443 -o utun $set_cn_ip -j REJECT 2>/dev/null
 		#公网访问
 		for ip in $host_ipv4 $local_ipv4 $reserve_ipv4; do
 			iptables -D INPUT -p tcp -s $ip --dport $mix_port -j ACCEPT 2>/dev/null
@@ -1364,18 +1365,18 @@ stop_firewall() { #还原防火墙配置
 		ip6tables -t nat -D PREROUTING -p udp --dport 53 -j shellcrashv6_dns 2>/dev/null
 		#redir
 		ip6tables -t nat -D PREROUTING -p tcp $ports -j shellcrashv6 2>/dev/null
-		ip6tables -D INPUT -p udp --dport 53 -m comment --comment "ShellCrash-IPV6_DNS-REJECT" -j REJECT 2>/dev/null
+		ip6tables -D INPUT -p udp --dport 53 -j REJECT 2>/dev/null
 		#mark
 		ip6tables -t mangle -D PREROUTING -p tcp $ports -j shellcrashv6_mark 2>/dev/null
 		ip6tables -t mangle -D PREROUTING -p udp $ports -j shellcrashv6_mark 2>/dev/null
-		ip6tables -D INPUT -p udp --dport 443 -m comment --comment "ShellCrash-QUIC-REJECT" $set_cn_ip -j REJECT 2>/dev/null
+		ip6tables -D INPUT -p udp --dport 443 $set_cn_ip -j REJECT 2>/dev/null
 		#tun
 		ip6tables -D FORWARD -o utun -j ACCEPT 2>/dev/null
-		ip6tables -D FORWARD -p udp --dport 443 -o utun -m comment --comment "ShellCrash-QUIC-REJECT" -j REJECT >/dev/null 2>&1
+		ip6tables -D FORWARD -p udp --dport 443 -o utun -j REJECT >/dev/null 2>&1
 		#屏蔽QUIC
 		[ "$dns_mod" != "fake-ip" -a "$cn_ipv6_route" = "已开启" ] && set_cn_ip6='-m set ! --match-set cn_ip6 dst'
-		ip6tables -D INPUT -p udp --dport 443 -m comment --comment "ShellCrash-QUIC-REJECT" $set_cn_ip6 -j REJECT 2>/dev/null
-		ip6tables -D FORWARD -p udp --dport 443 -o utun -m comment --comment "ShellCrash-QUIC-REJECT" $set_cn_ip6 -j REJECT 2>/dev/null
+		ip6tables -D INPUT -p udp --dport 443 $set_cn_ip6 -j REJECT 2>/dev/null
+		ip6tables -D FORWARD -p udp --dport 443 -o utun $set_cn_ip6 -j REJECT 2>/dev/null
 		#公网访问
 		ip6tables -D INPUT -p tcp --dport $mix_port -j REJECT 2>/dev/null
 		ip6tables -D INPUT -p tcp --dport $mix_port -j ACCEPT 2>/dev/null
