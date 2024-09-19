@@ -38,7 +38,7 @@ ckstatus(){
 	[ -z "$fwmark" ] && fwmark=$redir_port
 	[ -z "$db_port" ] && db_port=9999
 	[ -z "$dns_port" ] && dns_port=1053
-	[ -z "$multiport" ] && multiport='22,53,80,123,143,194,443,465,587,853,993,995,5222,8080,8443'
+	[ -z "$multiport" ] && multiport='22,80,143,194,443,465,587,853,993,995,5222,8080,8443'
 	[ -z "$redir_mod" ] && redir_mod=纯净模式
 	#检查mac地址记录
 	[ ! -f ${CRASHDIR}/configs/mac ] && touch ${CRASHDIR}/configs/mac
@@ -1313,7 +1313,7 @@ set_redir_mod(){ #代理模式设置
 					redir_mod=Tproxy模式
 					set_redir_config
 				}
-			elif [ -n "$(grep -E '^TPROXY$' /proc/net/ip_tables_targets)" ] ;then
+			elif grep -qE '^TPROXY$' /proc/net/ip_tables_targets || modprobe xt_TPROXY >/dev/null 2>&1;then
 				redir_mod=Tproxy模式
 				set_redir_config
 			else
