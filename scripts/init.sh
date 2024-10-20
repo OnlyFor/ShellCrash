@@ -1,7 +1,7 @@
 #!/bin/sh
 # Copyright (C) Juewuy
 
-version=1.9.0release
+version=1.9.1rc8
 
 setdir(){
 	dir_avail(){
@@ -15,6 +15,16 @@ setdir(){
 		if [ -z "$dir" ];then
 			echo -e "\033[31m输入错误！请重新设置！\033[0m"
 			set_usb_dir
+		fi
+	}
+	set_asus_dir(){
+		echo -e "请选择U盘目录"
+		du -hL /tmp/mnt | awk '{print " "NR" "$2"  "$1}'
+		read -p "请输入相应数字 > " num
+		dir=$(du -hL /tmp/mnt | awk '{print $2}' | sed -n "$num"p)
+		if [ ! -f "$dir/asusware.arm/etc/init.d/S50downloadmaster" ];then
+			echo -e "\033[31m未找到下载大师自启文件：$dir/asusware.arm/etc/init.d/S50downloadmaster，请检查设置！\033[0m"
+			set_asus_dir
 		fi
 	}
 	set_cust_dir(){
@@ -55,8 +65,9 @@ if [ -n "$systype" ];then
 	}
 	[ "$systype" = "asusrouter" ] && {
 		echo -e "\033[33m检测到当前设备为华硕固件，请选择安装方式\033[0m"	
-		echo -e " 1 基于USB设备安装(通用，须插入\033[31m任意\033[0mUSB设备)"
-		echo -e " 2 基于自启脚本安装(仅支持梅林及部分官改固件)"
+		echo -e " 1 基于USB设备安装(限23年9月之前固件，须插入\033[31m任意\033[0mUSB设备)"
+		echo -e " 2 基于自启脚本安装(仅支持梅林及部分非koolshare官改固件)"
+		echo -e " 3 基于U盘+下载大师安装(支持所有固件，限ARM设备，须插入U盘或移动硬盘)"
 		echo -e " 0 退出安装"
 		echo -----------------------------------------------
 		read -p "请输入相应数字 > " num
@@ -65,13 +76,20 @@ if [ -n "$systype" ];then
 			read -p "将脚本安装到USB存储/系统闪存？(1/0) > " res
 			[ "$res" = "1" ] && set_usb_dir || dir=/jffs
 			usb_status=1
-			;;
+		;;
 		2)
 			echo -e "如无法正常开机启动，请重新使用USB方式安装！"
 			sleep 2
-			dir=/jffs ;;
+			dir=/jffs 
+		;;
+		3)
+			echo -e "请先在路由器网页后台安装下载大师并启用，之后选择外置存储所在目录！"
+			sleep 2
+			set_asus_dir
+		;;
 		*)
-			exit 1 ;;
+			exit 1 
+		;;
 		esac
 	}
 	[ "$systype" = "ng_snapshot" ] && dir=/tmp/mnt
@@ -136,6 +154,9 @@ setconfig(){
 	systype=asusrouter #华硕固件
 	[ -f "/jffs/.asusrouter" ] && initdir='/jffs/.asusrouter'
 	[ -d "/jffs/scripts" ] && initdir='/jffs/scripts/nat-start' 
+	#华硕启用jffs
+	nvram set jffs2_scripts="1"
+	nvram commit
 	}
 [ -f "/data/etc/crontabs/root" ] && systype=mi_snapshot #小米设备
 [ -w "/var/mnt/cfg/firewall" ] && systype=ng_snapshot #NETGEAR设备
@@ -160,10 +181,10 @@ else
 	[ -w /etc/systemd/system ] && sysdir=/etc/systemd/system
 	if [ -n "$sysdir" -a "$USER" = "root" -a "$(cat /proc/1/comm)" = "systemd" ];then
 		#创建shellcrash用户
-		type userdel && userdel shellcrash 2>/dev/null
+		userdel shellcrash 2>/dev/null
 		sed -i '/0:7890/d' /etc/passwd
 		sed -i '/x:7890/d' /etc/group
-		if type useradd >/dev/null 2>&1; then
+		if useradd -h >/dev/null 2>&1; then
 			useradd shellcrash -u 7890 2>/dev/null
 			sed -Ei s/7890:7890/0:7890/g /etc/passwd
 		else
@@ -181,8 +202,9 @@ else
 	fi
 fi
 #修饰文件及版本号
-command -v bash >/dev/null 2>&1 && shtype=bash || shtype=sh 
-for file in start.sh task.sh ;do
+command -v bash >/dev/null 2>&1 && shtype=bash 
+[ -x /bin/ash ] && shtype=ash 
+for file in start.sh task.sh menu.sh;do
 	sed -i "s|/bin/sh|/bin/$shtype|" ${CRASHDIR}/${file}
 	chmod 755 ${CRASHDIR}/${file}
 done
@@ -201,6 +223,12 @@ else
 	COMMAND='"$TMPDIR/CrashCore -d $BINDIR -f $TMPDIR/config.yaml"'
 fi
 setconfig COMMAND "$COMMAND" ${CRASHDIR}/configs/command.env
+#设置防火墙执行模式
+grep -q 'firewall_mod' "$CRASHDIR/configs/ShellClash.cfg" 2>/dev/null || {
+	iptables -j REDIRECT -h >/dev/null 2>&1 && firewall_mod=iptables
+	nft add table inet shellcrash 2>/dev/null && firewall_mod=nftables
+	setconfig firewall_mod $firewall_mod
+}
 #设置更新地址
 [ -n "$url" ] && setconfig update_url $url
 #设置环境变量
@@ -231,11 +259,19 @@ else
 	echo -e "\033[33m无法写入环境变量！请检查安装权限！\033[0m"
 	exit 1
 fi
+#在允许的情况下创建/usr/bin/crash文件
+touch /usr/bin/crash 2>/dev/null && {
+	cat > /usr/bin/crash <<EOF
+#/bin/$shtype
+$CRASHDIR/menu.sh \$1 \$2 \$3 \$4 \$5
+EOF
+	chmod +x /usr/bin/crash
+}
 #梅林/Padavan额外设置
 [ -n "$initdir" ] && {
 	sed -i '/ShellCrash初始化/'d $initdir
 	touch $initdir
-	echo "$CRASHDIR/start.sh init #ShellCrash初始化脚本" >> $initdir
+	echo "$CRASHDIR/start.sh init & #ShellCrash初始化脚本" >> $initdir
 	chmod a+rx $initdir 2>/dev/null
 	setconfig initdir $initdir
 }
@@ -257,10 +293,13 @@ else
 fi
 #华硕USB启动额外设置
 [ "$usb_status" = "1" ]	&& {
-	echo "$CRASHDIR/start.sh init #ShellCrash初始化脚本" > ${CRASHDIR}/asus_usb_mount.sh
+	echo "$CRASHDIR/start.sh init & #ShellCrash初始化脚本" > ${CRASHDIR}/asus_usb_mount.sh
 	nvram set script_usbmount="$CRASHDIR/asus_usb_mount.sh"
 	nvram commit
 }
+#华硕下载大师启动额外设置
+[ -f "$dir/asusware.arm/etc/init.d/S50downloadmaster" ] && [ -z "$(grep 'ShellCrash' $dir/asusware.arm/etc/init.d/S50downloadmaster)" ] && \
+	sed -i "/^PATH=/a\\$CRASHDIR/start.sh init & #ShellCrash初始化脚本" "$dir/asusware.arm/etc/init.d/S50downloadmaster"
 #删除临时文件
 rm -rf /tmp/*rash*gz
 rm -rf /tmp/SC_tmp
@@ -291,14 +330,13 @@ done
 for file in cron task.sh task.list;do
 	mv -f ${CRASHDIR}/$file ${CRASHDIR}/task/$file 2>/dev/null
 done
-chmod 755 ${CRASHDIR}/task/task.sh
 #旧版文件清理
 userdel shellclash >/dev/null 2>&1
 sed -i '/shellclash/d' /etc/passwd
 sed -i '/shellclash/d' /etc/group
 rm -rf /etc/init.d/clash
 [ "$systype" = "mi_snapshot" -a "$CRASHDIR" != '/data/clash' ] && rm -rf /data/clash
-for file in CrashCore clash.sh shellcrash.rc core.new clashservice log shellcrash.service mark? mark.bak;do
+for file in CrashCore clash.sh getdate.sh shellcrash.rc core.new clashservice log shellcrash.service mark? mark.bak;do
 	rm -rf ${CRASHDIR}/$file
 done
 #旧版变量改名
@@ -307,5 +345,9 @@ sed -i "s/clash_v/core_v/g" $configpath
 sed -i "s/clash.meta/meta/g" $configpath
 sed -i "s/ShellClash/ShellCrash/g" $configpath
 sed -i "s/cpucore=armv8/cpucore=arm64/g" $configpath
+sed -i "s/redir_mod=Nft基础/redir_mod=Redir模式/g" $configpath
+sed -i "s/redir_mod=Nft混合/redir_mod=Tproxy模式/g" $configpath
+sed -i "s/redir_mod=Tproxy混合/redir_mod=Tproxy模式/g" $configpath
+sed -i "s/redir_mod=纯净模式/firewall_area=4/g" $configpath
 
 echo -e "\033[32m脚本初始化完成,请输入\033[30;47m crash \033[0;33m命令开始使用！\033[0m"
